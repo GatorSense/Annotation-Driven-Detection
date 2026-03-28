@@ -1,47 +1,46 @@
+
 #!/usr/bin/env python3
 """
 Train Faster R-CNN baseline vs grid-fused backbone on AWIR, selecting best checkpoint by validation loss.
 
-Example:
-  python train_awir_frcnn_grid.py \
-    --data_root /blue/azare/zhou.m/awir/data_awir/AWIR \
-    --grid_root /blue/azare/zhou.m/object_detection_CTL/awir_sliding_grids \
-    --variant dtl \
-    --epochs 20 \
-    --batch 2 \
-    --num_workers 4 \
-    --run_dir /blue/azare/zhou.m/awir/fasterrcnn_runs \
-    --run_tag baseline_vs_grid_dtl
-
-Notes:
-- Grid files are stored in: <grid_root>/<split_name>/*.npz  (split_name: train/val)
-- Each npz contains keys like: dtl_grid, dtl_hard_grid, matl_grid, etc.
-- Grid filenames may be: Class__STEM.npz or STEM.npz
+Example usage:
+    python frcnn_embedding_training.py \
+        --data_root /path/to/AWIR \
+        --grid_root /path/to/awir_sliding_grids \
+        --variants dtl,dtl_hard,matl \
+        --epochs 20 \
+        --batch 2 \
+        --num_workers 4 \
+        --run_dir /path/to/runs \
+        --run_tag baseline_vs_grid_dtl
 """
 
+# Standard libraries
 import os
 import glob
 import random
 import argparse
+from collections import Counter
 from typing import Dict, List, Tuple, Optional
 
+# Third-party libraries
 import numpy as np
 from PIL import Image
-
 import torch
-from torch.utils.data import Dataset, DataLoader
-import torchvision
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
+import torchvision
 import torchvision.transforms.functional as TF
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 
-from collections import Counter
+
 
 # -----------------------------
 # I/O helpers: save/load
 # -----------------------------
 def save_checkpoint(path, model, optimizer=None, scheduler=None, epoch=None, extra=None):
+    """Save model checkpoint with optional optimizer/scheduler state."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     ckpt = {
         "model_state": model.state_dict(),
@@ -58,7 +57,9 @@ def save_checkpoint(path, model, optimizer=None, scheduler=None, epoch=None, ext
 # -----------------------------
 # Model builders
 # -----------------------------
+
 def build_frcnn(num_classes: int):
+    """Build a Faster R-CNN model with a ResNet-50 FPN backbone."""
     m = torchvision.models.detection.fasterrcnn_resnet50_fpn(weights="DEFAULT")
     in_features = m.roi_heads.box_predictor.cls_score.in_features
     m.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
@@ -266,26 +267,23 @@ def wrap_frcnn_backbone_with_grid_fusion(frcnn_model, grid_dim, fusion_type="add
 
 
 
-# def build_frcnn_with_grid(num_classes: int, grid_dim: int):
-#     m = build_frcnn(num_classes)
-#     m.backbone = BackboneWithCachedGrid(m.backbone, fpn_channels=256, grid_dim=grid_dim)
-#     return m
+
 
 
 # -----------------------------
 # Dataset utilities
 # -----------------------------
+
 def yolo_to_xyxy(line: str, W: int, H: int):
+    """Convert YOLO-format bbox to [x1, y1, x2, y2] in image coordinates."""
     parts = line.strip().split()
     if len(parts) < 5:
         return None
     cx, cy, bw, bh = map(float, parts[1:5])
-
     x1 = (cx - bw / 2.0) * W
     y1 = (cy - bh / 2.0) * H
     x2 = (cx + bw / 2.0) * W
     y2 = (cy + bh / 2.0) * H
-
     x1 = max(0.0, min(x1, W - 1))
     y1 = max(0.0, min(y1, H - 1))
     x2 = max(0.0, min(x2, W - 1))
@@ -295,7 +293,9 @@ def yolo_to_xyxy(line: str, W: int, H: int):
     return [x1, y1, x2, y2]
 
 
+
 def load_grid_npz(feature_npz: str, grid_key: str) -> torch.Tensor:
+    """Load a grid from .npz and return as torch tensor [D, Gh, Gw]."""
     z = np.load(feature_npz, allow_pickle=True)
     if grid_key not in z:
         raise KeyError(f"{feature_npz}: missing key '{grid_key}'. Available keys: {list(z.keys())}")
@@ -403,9 +403,11 @@ class AWIRGridDataset(AWIRBaseDataset):
         return img_t, target, grid
 
 
+
 def collate_base(batch):
     images, targets, paths = zip(*batch)
     return list(images), list(targets), list(paths)
+
 
 
 def collate_grid(batch):
@@ -544,11 +546,13 @@ def eval_per_class_pr(model, loader, device, class_ids, iou_thresh=0.5, score_th
 # -----------------------------
 # Training
 # -----------------------------
+def make_optim(model, lr=0.005):
+
 from torch.optim import SGD
 from torch.optim.lr_scheduler import StepLR
 
-
 def make_optim(model, lr=0.005):
+    """Create SGD optimizer and StepLR scheduler."""
     params = [p for p in model.parameters() if p.requires_grad]
     opt = SGD(params, lr=lr, momentum=0.9, weight_decay=0.0005)
     sch = StepLR(opt, step_size=3, gamma=0.1)
@@ -718,44 +722,33 @@ def infer_grid_dim(grid_root: str, variant: str) -> int:
 # Main
 # -----------------------------
 def main():
+    """Main entry point for training baseline and grid-fused Faster R-CNN models."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_root", type=str, required=True, help="AWIR root with class subdirs.")
     parser.add_argument("--grid_root", type=str, required=True, help="Root containing train/ and val/ npz grids.")
-
-    parser.add_argument(
-        "--variants",
-        type=str,
-        default="dtl,dtl_hard,matl",
-        help="Comma-separated list of grid variants to train (expects <variant>_grid key inside each npz)."
-    )
-
+    parser.add_argument("--variants", type=str, default="dtl,dtl_hard,matl",
+                        help="Comma-separated list of grid variants to train (expects <variant>_grid key inside each npz).")
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch", type=int, default=2)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--lr", type=float, default=0.005)
-
     parser.add_argument("--val_frac", type=float, default=0.25)
     parser.add_argument("--seed", type=int, default=42)
-
     parser.add_argument("--image_size", type=int, nargs=2, default=[640, 640], help="H W")
     parser.add_argument("--run_dir", type=str, required=True)
-    parser.add_argument("--run_tag", type=str, required=True)  # single run folder
+    parser.add_argument("--run_tag", type=str, required=True)
     parser.add_argument("--test_frac", type=float, default=0.2)
-    
-    parser.add_argument("--fusion", type=str, default='additive')
-    
-    # "additive" | "residual_concat" | "film" | "spatial_mask"
-
-
+    parser.add_argument("--fusion", type=str, default='additive',
+                        help="Fusion type: additive | residual_concat | film | spatial_mask")
     args = parser.parse_args()
 
     print("\n=== Run arguments ===")
     for k, v in vars(args).items():
         print(f"{k:>12}: {v}")
     print("=====================\n")
-    
+
     variants = [v.strip() for v in args.variants.split(",") if v.strip()]
-    if len(variants) == 0:
+    if not variants:
         raise ValueError("No variants provided. Use --variants dtl,dtl_hard,matl")
 
     class_names = ["Cow", "Horse", "Deer"]
@@ -766,7 +759,7 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
 
-    # Same train/val split for everything
+    # Build train/val/test splits
     all_items, train_items, val_items, test_items = build_train_val_test_items(
         root=args.data_root,
         class_names=class_names,
@@ -782,7 +775,7 @@ def main():
 
     img_h, img_w = int(args.image_size[0]), int(args.image_size[1])
 
-    # Baseline loaders (reused)
+    # Baseline loaders
     train_base_loader = DataLoader(
         AWIRBaseDataset(train_items, class_to_id, image_size=(img_h, img_w)),
         batch_size=args.batch, shuffle=True,
@@ -794,36 +787,25 @@ def main():
         num_workers=args.num_workers, collate_fn=collate_base, pin_memory=True
     )
 
-    # Single run folder
+    # Run folder
     run_path = os.path.join(args.run_dir, args.run_tag)
     os.makedirs(run_path, exist_ok=True)
     print(f"Saving checkpoints to: {run_path}")
 
     num_classes = 1 + len(class_names)
 
-    # -------------------------
-    # Build + train BASELINE once
-    # -------------------------
+    # Build + train BASELINE
     baseline_model = build_frcnn(num_classes).to(device)
     opt_base, sch_base = make_optim(baseline_model, lr=args.lr)
     best_base_loss = float("inf")
 
-    # -------------------------
-    # Build GRID models + loaders (one per variant)
-    # -------------------------
-    grid_models = {}
-    grid_opts = {}
-    grid_schs = {}
-    grid_best_loss = {}
-    train_grid_loaders = {}
-    val_grid_loaders = {}
-    grid_dims = {}
-
+    # Build GRID models + loaders
+    grid_models, grid_opts, grid_schs, grid_best_loss = {}, {}, {}, {}
+    train_grid_loaders, val_grid_loaders, grid_dims = {}, {}, {}
     for v in variants:
         gd = infer_grid_dim(args.grid_root, v)
         grid_dims[v] = gd
         print(f"Inferred grid_dim[{v}]={gd} from key {v}_grid")
-
         train_grid_loaders[v] = DataLoader(
             AWIRGridDataset(train_items, class_to_id, grid_root=args.grid_root, split_name="train",
                             variant=v, image_size=(img_h, img_w), emb_dim=gd),
@@ -836,68 +818,38 @@ def main():
             batch_size=args.batch, shuffle=False,
             num_workers=args.num_workers, collate_fn=collate_grid, pin_memory=True
         )
-
-        # m = build_frcnn_with_grid(num_classes, grid_dim=gd).to(device)
-        
-        
         m = build_frcnn(num_classes).to(device)
         m = wrap_frcnn_backbone_with_grid_fusion(
-            m,
-            grid_dim=gd,
-            fusion_type=args.fusion,          # "additive" | "residual_concat" | "film" | "spatial_mask"
-            levels=(0,1,2,3),
-            debug=False
+            m, grid_dim=gd, fusion_type=args.fusion, levels=(0,1,2,3), debug=False
         ).to(device)
-
         opt, sch = make_optim(m, lr=args.lr)
+        grid_models[v], grid_opts[v], grid_schs[v], grid_best_loss[v] = m, opt, sch, float("inf")
 
-        grid_models[v] = m
-        grid_opts[v] = opt
-        grid_schs[v] = sch
-        grid_best_loss[v] = float("inf")
-
-    # -------------------------
-    # Training loop: one epoch trains baseline + all grid variants
-    # -------------------------
+    # Training loop
     for e in range(args.epochs):
         print("\n" + "=" * 90)
         print(f"Epoch {e+1}/{args.epochs}")
         print("=" * 90)
-
-        # ---- Train baseline ----
         train_loss_base = train_one_epoch(baseline_model, train_base_loader, opt_base, device, uses_grid=False)
         sch_base.step()
-
-        # ---- Train each grid model ----
         train_loss_grid = {}
         for v in variants:
             train_loss_grid[v] = train_one_epoch(
                 grid_models[v], train_grid_loaders[v], grid_opts[v], device, uses_grid=True
             )
             grid_schs[v].step()
-
-        # ---- Val loss (selection criterion) ----
         val_loss_base = compute_val_loss(baseline_model, val_base_loader, device, uses_grid=False)
-
-        val_loss_grid = {}
-        for v in variants:
-            val_loss_grid[v] = compute_val_loss(grid_models[v], val_grid_loaders[v], device, uses_grid=True)
-
+        val_loss_grid = {v: compute_val_loss(grid_models[v], val_grid_loaders[v], device, uses_grid=True) for v in variants}
         print(f"Baseline  train loss: {train_loss_base:.4f} | val loss: {val_loss_base:.4f}")
         for v in variants:
             print(f"{v:<9} train loss: {train_loss_grid[v]:.4f} | val loss: {val_loss_grid[v]:.4f}")
-
-        # ---- Metrics (optional) ----
         base_overall = eval_overall_pr(baseline_model, val_base_loader, device, uses_grid=False)
         print(f"Baseline  val: P={base_overall['precision']:.3f} R={base_overall['recall']:.3f} F1={base_overall['f1']:.3f}")
-
-        grid_overall = {}
+        grid_overall = {v: eval_overall_pr(grid_models[v], val_grid_loaders[v], device, uses_grid=True) for v in variants}
         for v in variants:
-            grid_overall[v] = eval_overall_pr(grid_models[v], val_grid_loaders[v], device, uses_grid=True)
             o = grid_overall[v]
             print(f"{v:<9} val: P={o['precision']:.3f} R={o['recall']:.3f} F1={o['f1']:.3f}")
 
-#         # -------------------------
 #         # Save per-epoch checkpoints
 #         # -------------------------
 #         save_checkpoint(
