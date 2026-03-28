@@ -40,7 +40,7 @@ Output:
 
 For each fold, the script saves projection checkpoints:
 
-trained_models/emb_proj/clip/
+trained_embedding_models_demo/emb_proj/clip/
     dtl_best_fold{fold}.h5
     dtl_hard_best_fold{fold}.h5
     matl_best_fold{fold}.h5
