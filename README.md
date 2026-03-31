@@ -1,250 +1,156 @@
 # Annotation-Driven-Detection
 Beyond Task-Driven Features for Object Detection
 
-    OVERVIEW
+## Environment Setup
 
-This document describes the full experimental pipeline used to evaluate
-latent space methods (DTL, DTL-hard, MATL, CTL) for object detection
-on the AWIR dataset using Faster R-CNN.
+This project requires Python 3.8+ and the following packages:
 
-The pipeline consists of four stages:
+- numpy>=1.21.0
+- pandas>=1.3.0
+- scikit-learn>=1.0.0
+- tensorflow>=2.8.0
+- keras>=2.8.0
+- comet-ml>=3.30.0
+- matplotlib>=3.4.0
+- seaborn>=0.11.0
+- umap-learn>=0.5.3
+- torch>=1.10.0
+- torchvision>=0.11.0
+- pillow
 
-Train projection models from CLIP embeddings
+To install all dependencies:
 
-Generate sliding-window latent feature grids
+```bash
+pip install -r requirements.txt
+pip install torch torchvision pillow
+```
 
-Train Faster R-CNN with latent grid fusion
+## Overview
 
-Evaluate trained detection models
+This repository provides the full experimental pipeline for evaluating latent space methods (DTL, DTL-hard, MATL, CTL) for object detection on the AWIR dataset using Faster R-CNN. The code is organized into modular scripts and utilities for training, feature extraction, and evaluation.
 
-Each stage depends on outputs from the previous stage.
+### Main Python Scripts
 
------------------------------------------------------------------------
+- **embedding_model_training.py**: Train projection heads from CLIP embeddings using various triplet loss formulations.
+- **frcnn_embedding_training.py**: Train Faster R-CNN models with latent grid fusion using precomputed sliding-window latent feature grids.
+- **awir_custom_losses.py**: Custom loss functions (e.g., triplet losses) for embedding training.
+- **awir_utilities.py**: Utility functions for feature computation, normalization, and data processing.
 
-STAGE 1: Train Projection Models from CLIP Embeddings
+### Pipeline Stages
 
------------------------------------------------------------------------
+1. **Train Projection Models from CLIP Embeddings**
+    - Script: `embedding_model_training.py`
+    - Purpose: Train a projection head that maps frozen CLIP ViT-B/32 image embeddings into a structured latent space (DTL, DTL_HARD, MATL, CTL) using triplet loss variants.
+    - Output: Trained projection head checkpoints (e.g., `ctl_best_fold1.h5`, `dtl_best_fold1.h5`, etc.) saved in `demo_trained_embedding_models/`.
 
-Script:
-/blue/azare/zhou.m/awir/obj_det_awir_clip_ctl_emb.py
+2. **Generate Sliding-Window Latent Feature Grids**
+    - Notebook: `observing_embeddings.ipynb`
+    - Purpose: For each projection model, slide a window across each AWIR image, extract patch-level CLIP embeddings, project them, and save as spatial grids in `.npz` format under `demo_sliding_grids/`.
 
-Purpose:
+3. **Train Faster R-CNN with Latent Grid Fusion**
+    - Script: `frcnn_embedding_training.py`
+    - Purpose: Train Faster R-CNN using precomputed latent grids, evaluating different fusion techniques (additive, concatenation, FiLM, spatial mask, etc.).
+    - Output: Trained detection models and logs.
 
-Train a projection head that maps frozen CLIP ViT-B/32 image embeddings
-into a structured latent space defined by the selected method:DTL, DTL_HARD, MATL, CTL
+4. **Evaluate Detection Models**
+    - Notebook: (e.g., `faster_r_cnn.ipynb` or custom evaluation code)
+    - Purpose: Load trained models, run inference on validation data, and compute metrics (mAP, precision, recall, etc.).
 
-CLIP remains frozen. The projection layer learns annotation-driven
-structure using the chosen triplet formulation.
+---
 
-Output:
+## Usage
 
-For each fold, the script saves projection checkpoints:
+### 1. Train Embedding Projection Models
 
-trained_embedding_models_demo/emb_proj/clip/
-    dtl_best_fold{fold}.h5
-    dtl_hard_best_fold{fold}.h5
-    matl_best_fold{fold}.h5
-    ctl_best_fold{fold}.h5
-    
-    These files represent trained projection heads that transform 512-D
-CLIP embeddings into the learned latent space.
+```bash
+python embedding_model_training.py --margin 0.1 --embedding_dimension 1024 --batch_size 32 --modality rgb --test_size 0.5 --cls_weight 0.5
+```
+*See script arguments in the file for more options.*
 
-Important:
+### 2. Generate Sliding-Window Grids
 
-The folds correspond to projection model cross-validation.
-The dataset split used later for detection remains fixed.
+Run the relevant section in `observing_embeddings.ipynb` to save embedding grids for each image. Output is saved in `demo_sliding_grids/`.
 
------------------------------------------------------------------------
+### 3. Train Faster R-CNN with Grid Fusion
 
-STAGE 2: Generate Sliding-Window Latent Feature Grids
+```bash
+python frcnn_embedding_training.py --data_root <AWIR dataset root> --grid_root demo_sliding_grids/ --variants dtl,dtl_hard,matl,ctl --epochs 20 --batch 2 --num_workers 4 --run_dir <output_dir> --run_tag <experiment_tag>
+```
+*See script and docstring for all available arguments.*
 
------------------------------------------------------------------------
+### 4. Evaluate Detection Models
 
-Notebook:
-observing_embeddings.ipynb
+Use your preferred evaluation notebook or script to load trained models and compute detection metrics.
 
-Section:
-Saving Embedding Grids
+---
 
-Purpose:
+## Demo: Using Precomputed Grids with Faster R-CNN
 
-For each projection model fold and latent space method:
+This demo shows how to use the precomputed sliding-window latent feature grids in `demo_sliding_grids/` for grid-fused Faster R-CNN training.
 
-Load CLIP ViT-B/32.
+### 1. Prepare the Grids
 
-Slide a window across each AWIR image.
+The folder `demo_sliding_grids/` contains `.npz` files for each image, with keys like `dtl_grid`, `dtl_hard_grid`, `matl_grid`, `ctl_grid`, etc. These are spatial grids of projected CLIP features, precomputed for each image in the dataset.
 
-Extract patch-level CLIP embeddings.
+Example structure:
 
-Pass embeddings through the trained projection head.
-
-Reshape embeddings into a spatial grid aligned with the image.
-
-Save one compressed .npz file per image.
-
-Each .npz contains:
-
-clip_grid
-dtl_grid
-dtl_hard_grid
-matl_grid
-ctl_grid
-coords_grid
-metadata (image size, grid size, stride, patch size)
-
-awir_sliding_grids_fold{fold_number}/
+```
+demo_sliding_grids/
     train/
-        *.npz
+        Cow__CA_DJI_0488.npz
+        ...
     val/
-        *.npz
+        ...
     index_train.csv
     index_val.csv
-    
-    
-Each folder corresponds to one projection fold.
-The train/val split is deterministic and shared across folds.
+```
 
-These saved grids are later loaded by the Faster R-CNN training script.
+### 2. Train Faster R-CNN with Grid Fusion
 
------------------------------------------------------------------------
+Run the following command to train a grid-fused Faster R-CNN using the precomputed grids:
 
-STAGE 3: Train Faster R-CNN with Latent Grid Fusion
+```bash
+python frcnn_embedding_training.py \
+    --data_root <AWIR dataset root> \
+    --grid_root demo_sliding_grids \
+    --variants dtl,dtl_hard,matl,ctl \
+    --epochs 20 \
+    --batch 2 \
+    --num_workers 4 \
+    --run_dir <output_dir> \
+    --run_tag demo_grid_fusion \
+    --fusion additive
+```
 
------------------------------------------------------------------------
+- `--grid_root` should point to the folder containing the precomputed `.npz` grids (e.g., `demo_sliding_grids`).
+- `--variants` specifies which grid types to use (must match keys in the `.npz` files).
+- `--fusion` selects the fusion method (additive, residual_concat, film, spatial_mask).
 
-Script:
-train_awir_frcnn_grid_multipleFusion.py
+The script will automatically load the correct grid for each image and fuse it into the FPN backbone during training.
 
-Purpose:
+### 3. Output
 
-Train Faster R-CNN using precomputed sliding-window latent grids.
-Different fusion techniques are evaluated to inject latent structure
-into the backbone feature hierarchy.
+Checkpoints and logs will be saved in the specified `--run_dir` under the `--run_tag` subfolder. Each variant will have its own best checkpoint based on validation loss.
 
-Fusion methods may include:
+---
 
-- Additive fusion
-- Concatenation fusion
-- FiLM-based modulation
-- Spatial mask fusion
+## File Descriptions
 
-Inputs: 
+- **embedding_model_training.py**: Main script for training embedding projection heads. Supports argument parsing for margin, embedding dimension, batch size, modality, and more. Uses utilities and custom losses from other modules.
+- **frcnn_embedding_training.py**: Main script for training Faster R-CNN with latent grid fusion. Supports various fusion strategies and experiment tracking.
+- **awir_custom_losses.py**: Implements TensorFlow/Keras triplet loss functions and related selection logic.
+- **awir_utilities.py**: Provides feature computation, normalization, and data processing utilities (e.g., mutual information, ANOVA, grid generation).
 
---data_root      AWIR dataset root
---grid_root      awir_sliding_grids_fold{fold_number}
---variants       latent space methods to use
---fusion type    selected fusion mechanism
---hyperparameters (epochs, batch size, learning rate, etc.)
+---
 
+## Pipeline Summary
 
-During training:
-
-The detector loads image data.
-
-The corresponding latent grid is loaded from disk.
-
-Latent features are fused into the backbone.
-
-RPN and ROI heads operate normally.
-
-The detector is trained end-to-end.
-
-Output:
-
-Trained Faster R-CNN models are saved under:
-
-fasterrcnn_runs/{run_tag}/
-
-This directory contains:
-- Model checkpoints
-- Training logs
-- Configuration metadata
-
-Each run_tag encodes:
-latent space method
-fold number
-fusion strategy
-batch size and learning rate
-
------------------------------------------------------------------------
-
-STAGE 4: Evaluate Detection Models
-
------------------------------------------------------------------------
-
-Notebook:
-faster_r_cnn.ipynb
-
-Section:
-Evaluating from Saved Model
-
-Purpose:
-
-Load a trained Faster R-CNN checkpoint and evaluate detection
-performance on the validation set.
-
-Evaluation metrics may include:
-
-- mAP@0.5
-- Precision
-- Recall
-- ROC curves
-- Spatial IoU comparisons
-
-Procedure:
-
-Load the saved model checkpoint.
-
-Load validation data.
-
-Perform inference.
-
-Compute evaluation metrics.
-
-Save plots and summary results.
-
-This stage produces the final quantitative comparisons across:
-
-- Latent space methods
-- Projection folds
-- Fusion mechanisms
-
-
------------------------------------------------------------------------
-
-COMPLETE PIPELINE SUMMARY
-
------------------------------------------------------------------------
-
-Step 1:
-Train projection heads from CLIP embeddings.
-
-Step 2:
-Generate sliding-window latent feature grids per fold.
-
-Step 3:
-Train Faster R-CNN using grid fusion.
-
-Step 4:
-Evaluate trained detection models.
+1. Train projection heads from CLIP embeddings (`embedding_model_training.py`).
+2. Generate sliding-window latent feature grids per fold (`observing_embeddings.ipynb`).
+3. Train Faster R-CNN using grid fusion (`frcnn_embedding_training.py`).
+4. Evaluate trained detection models (custom evaluation code or notebook).
 
 Data flow:
 
-AWIR Images
-    → CLIP Embeddings
-    → Projection Head (DTL / MATL / CTL)
-    → Sliding Window Grid
-    → Faster R-CNN Fusion
-    → Detection Metrics
-    
-    
-    NOTES
+AWIR Images → CLIP Embeddings → Projection Head (DTL / MATL / CTL) → Sliding Window Grid → Faster R-CNN Fusion → Detection Metrics
 
-Projection folds apply to the projection head only.
-
-The detection dataset split remains fixed.
-
-Sliding grids are precomputed to avoid recomputation during detection training.
-
-All latent space comparisons use identical detection hyperparameters
-for fair evaluation.

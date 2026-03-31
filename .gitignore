@@ -1,0 +1,43 @@
+# Data and embeddings (user-provided)
+data.npz
+embeddings/
+*.npy
+*.npz
+
+# Results and outputs
+results/
+*.h5
+*.hdf5
+checkpoints/
+
+# Environment and dependencies
+venv/
+env/
+.venv
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.log
+
+# Jupyter notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Comet ML
+.comet/
+.cometml/
+
+# Misc
+build/
+dist/
+*.egg-info/
+.pytest_cache/
