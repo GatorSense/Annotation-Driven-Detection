@@ -1,6 +1,8 @@
 # Annotation-Driven-Detection
 Beyond Task-Driven Features for Object Detection
 
+Managed by [Meilun Zhou](https://www.linkedin.com/in/meilun-zhou/) through [GatorSense](https://faculty.eng.ufl.edu/machine-learning/).
+
 ## Environment Setup
 
 This project requires Python 3.8+ and the following packages:
